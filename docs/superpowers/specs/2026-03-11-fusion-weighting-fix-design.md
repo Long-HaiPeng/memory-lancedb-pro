@@ -57,14 +57,16 @@ const fusedScore = vectorResult
 
 ## Numerical Verification
 
-Default config: `vectorWeight=0.7`, `bm25Weight=0.3`, `hardMinScore=0.62`
+Default config: `vectorWeight=0.7`, `bm25Weight=0.3`, `hardMinScore=0.35`
 
-| Scenario | vectorScore | bm25Score | Old formula | New formula | Passes hardMinScore? |
-|----------|------------|-----------|-------------|-------------|---------------------|
-| Rerank regression test | 0.5439 | 0.7834 | 0.721 | 0.721 | Yes |
-| Lexical test (乌龙茶) | 0.5007 | 0.78 | 0.718 | 0.718 | Yes |
-| High vector, no BM25 | 0.9 | 0.0 | 0.9 | 0.63 | Yes |
-| Balanced scores | 0.6 | 0.5 | 0.69 | 0.57 | Yes (hardMinScore=0.35) |
+Rows 1-2 use the test-specific override `hardMinScore=0.62` (from `retriever-rerank-regression.mjs`). Rows 3-4 use the true default `hardMinScore=0.35`.
+
+| Scenario | vectorScore | bm25Score | Old formula | New formula | hardMinScore | Passes? |
+|----------|------------|-----------|-------------|-------------|-------------|---------|
+| Rerank regression test | 0.5439 | 0.7834 | 0.721 | 0.721 | 0.62 | Yes |
+| Lexical test (乌龙茶) | 0.5007 | 0.78 | 0.718 | 0.718 | 0.62 | Yes |
+| High vector, no BM25 | 0.9 | 0.0 | 0.9 | 0.63 | 0.35 | Yes |
+| Balanced scores | 0.6 | 0.5 | 0.69 | 0.57 | 0.35 | Yes |
 
 Row 3 shows the expected behavior change: pure vector results are no longer inflated beyond what the weight config dictates.
 
