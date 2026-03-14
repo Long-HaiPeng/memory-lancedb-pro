@@ -32,7 +32,6 @@ import {
   appendRelation,
   buildSmartMetadata,
   deriveFactKey,
-  isMemoryActiveAt,
   type MemoryRelation,
   parseSmartMetadata,
   stringifySmartMetadata,
@@ -422,7 +421,7 @@ export class SmartExtractor {
         if (dedupResult.matchId) {
           if (
             TEMPORAL_VERSIONED_CATEGORIES.has(candidate.category) &&
-            (!dedupResult.contextLabel || dedupResult.contextLabel === "general")
+            dedupResult.contextLabel === "general"
           ) {
             await this.handleSupersede(
               candidate,
@@ -458,15 +457,15 @@ export class SmartExtractor {
     candidateVector: number[],
     scopeFilter: string[],
   ): Promise<DedupResult> {
-    // Stage 1: Vector pre-filter — find similar memories
-    const similar = await this.store.vectorSearch(
+    // Stage 1: Vector pre-filter — find similar active memories.
+    // excludeInactive ensures the store over-fetches to fill N active slots,
+    // preventing superseded history from crowding out the current fact.
+    const activeSimilar = await this.store.vectorSearch(
       candidateVector,
       5,
       SIMILARITY_THRESHOLD,
       scopeFilter,
-    );
-    const activeSimilar = similar.filter((result) =>
-      isMemoryActiveAt(parseSmartMetadata(result.entry.metadata, result.entry)),
+      { excludeInactive: true },
     );
 
     if (activeSimilar.length === 0) {
@@ -527,10 +526,23 @@ export class SmartExtractor {
 
       // Resolve merge target from LLM's match_index (1-based)
       const idx = data.match_index;
-      const matchEntry =
-        typeof idx === "number" && idx >= 1 && idx <= topSimilar.length
-          ? topSimilar[idx - 1]
-          : topSimilar[0];
+      const hasValidIndex = typeof idx === "number" && idx >= 1 && idx <= topSimilar.length;
+      const matchEntry = hasValidIndex
+        ? topSimilar[idx - 1]
+        : topSimilar[0];
+
+      // For destructive decisions (supersede), missing match_index is
+      // unsafe — we could invalidate the wrong memory. Degrade to create.
+      const destructiveDecisions = new Set(["supersede", "contradict"]);
+      if (destructiveDecisions.has(decision) && !hasValidIndex) {
+        this.log(
+          `memory-pro: smart-extractor: ${decision} decision has missing/invalid match_index (${idx}), degrading to create`,
+        );
+        return {
+          decision: "create",
+          reason: `${decision} degraded: missing match_index`,
+        };
+      }
 
       return {
         decision,

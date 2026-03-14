@@ -599,11 +599,12 @@ export function registerMemoryStoreTool(
 
           // Check for duplicates using raw vector similarity (bypasses importance/recency weighting)
           // Fail-open by design: dedup must never block a legitimate memory write.
+          // excludeInactive: superseded historical records must not block new writes.
           let existing: Awaited<ReturnType<MemoryStore["vectorSearch"]>> = [];
           try {
             existing = await runtimeContext.store.vectorSearch(vector, 1, 0.1, [
               targetScope,
-            ]);
+            ], { excludeInactive: true });
           } catch (err) {
             console.warn(
               `memory-lancedb-pro: duplicate pre-check failed, continue store: ${String(err)}`,
