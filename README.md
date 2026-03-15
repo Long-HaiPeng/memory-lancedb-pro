@@ -519,7 +519,7 @@ Notes:
 </details>
 
 Notes:
-- `tei` sends `{ query, texts }` and parses the top-level `[{ index, score }]` response format used by Hugging Face Text Embeddings Inference.
+- TEI request/response shape is documented in the TEI config example above.
 - `voyage` sends `{ model, query, documents }` without `top_n`. Responses are parsed from `data[].relevance_score`.
 
 </details>

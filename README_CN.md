@@ -519,7 +519,7 @@ OpenClaw 默认行为：
 </details>
 
 说明：
-- `tei` 发送 `{ query, texts }`，响应为顶层 `[{ index, score }]` 数组。
+- TEI 的请求/响应格式见上方 TEI 配置示例。
 - `voyage` 发送 `{ model, query, documents }` 格式（不含 `top_n`），响应从 `data[].relevance_score` 解析。
 
 </details>

@@ -687,7 +687,7 @@ export class MemoryRetriever {
         clearTimeout(timeout);
 
         if (response.ok) {
-          const data = (await response.json()) as Record<string, unknown>;
+          const data: unknown = await response.json();
 
           // Parse provider-specific response into unified format
           const parsed = parseRerankResponse(provider, data);
