@@ -476,6 +476,29 @@ type EmbeddedPiRunner = (params: Record<string, unknown>) => Promise<unknown>;
 const requireFromHere = createRequire(import.meta.url);
 let embeddedPiRunnerPromise: Promise<EmbeddedPiRunner> | null = null;
 
+// Circuit breaker for Layer 1: after 3 consecutive failures within 5min, skip Layer 1
+const layer1FailureTimestamps: number[] = [];
+const LAYER1_FAILURE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const LAYER1_FAILURE_THRESHOLD = 3;
+
+/** Reports a Layer 1 runner execution failure. Called by the caller when Layer 1 runner throws. */
+export function reportLayer1Failure(): void {
+  const now = Date.now();
+  layer1FailureTimestamps.push(now);
+  // Keep only failures within the window
+  const cutoff = now - LAYER1_FAILURE_WINDOW_MS;
+  while (layer1FailureTimestamps.length > 0 && layer1FailureTimestamps[0] < cutoff) {
+    layer1FailureTimestamps.shift();
+  }
+}
+
+function isLayer1CircuitOpen(): boolean {
+  const now = Date.now();
+  const cutoff = now - LAYER1_FAILURE_WINDOW_MS;
+  const recentFailures = layer1FailureTimestamps.filter((t) => t >= cutoff);
+  return recentFailures.length >= LAYER1_FAILURE_THRESHOLD;
+}
+
 export function toImportSpecifier(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -525,7 +548,27 @@ export function getExtensionApiImportSpecifiers(): string[] {
   return [...new Set(specifiers.filter(Boolean))];
 }
 
-async function loadEmbeddedPiRunner(): Promise<EmbeddedPiRunner> {
+/**
+ * Layer 1: 新 SDK API — api.runtime.agent.runEmbeddedPiAgent (4.22+)
+ * Layer 2: 舊 extensionAPI.js dynamic import（4.24-4.26 SDK 仍保留）
+ * Layer 3: CLI fallback
+ *
+ * 遷移自 Bug 2（Issue #606）：原本只使用 Layer 2，現改為 Try-New-First。
+ */
+// eslint-disable-next-line import/export
+export async function loadEmbeddedPiRunner(api: OpenClawPluginApi): Promise<EmbeddedPiRunner> {
+  // Layer 1: 嘗試新 SDK API (with circuit breaker)
+  if (!isLayer1CircuitOpen()) {
+    const newApi = (api as unknown as Record<string, unknown>).runtime?.agent;
+    if (typeof newApi?.runEmbeddedPiAgent === "function") {
+      const runner = newApi.runEmbeddedPiAgent.bind(newApi);
+      // Bug 2 fix: 將 Layer 1 結果寫入 cache，避免後續並發呼叫時 Layer 2 覆蓋掉 Layer 1
+      embeddedPiRunnerPromise ??= Promise.resolve(runner as EmbeddedPiRunner);
+      return embeddedPiRunnerPromise;
+    }
+  }
+
+  // Layer 2: Fallback 舊 extensionAPI.js
   if (!embeddedPiRunnerPromise) {
     embeddedPiRunnerPromise = (async () => {
       const importErrors: string[] = [];
@@ -547,6 +590,7 @@ async function loadEmbeddedPiRunner(): Promise<EmbeddedPiRunner> {
     })();
   }
 
+  // F2 fix: restore retry-on-failure semantics removed in PR716
   try {
     return await embeddedPiRunnerPromise;
   } catch (err) {
@@ -1223,6 +1267,7 @@ async function generateReflectionText(params: {
   thinkLevel: ReflectionThinkLevel;
   toolErrorSignals?: ReflectionErrorSignal[];
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+  api: OpenClawPluginApi;  // SDK migration Bug 2: pass api to use new runtime.agent API
 }): Promise<{ text: string; usedFallback: boolean; promptHash: string; error?: string; runner: "embedded" | "cli" | "fallback" }> {
   const prompt = buildReflectionPrompt(
     params.conversation,
@@ -1249,7 +1294,7 @@ async function generateReflectionText(params: {
       retryState,
       onLog: onRetryLog,
       execute: async () => {
-        const runEmbeddedPiAgent = await loadEmbeddedPiRunner();
+        const runEmbeddedPiAgent = await loadEmbeddedPiRunner(params.api);
         const modelRef = resolveAgentPrimaryModelRef(params.cfg, params.agentId);
         const { provider, model } = modelRef ? splitProviderModel(modelRef) : {};
         const embeddedTimeoutMs = Math.max(params.timeoutMs + 5000, 15000);
@@ -1293,6 +1338,8 @@ async function generateReflectionText(params: {
       reflectionText = typeof firstWithText?.text === "string" ? firstWithText.text.trim() : null;
     }
   } catch (err) {
+    // F1 fix: report Layer 1 runner execution failure to open circuit breaker
+    reportLayer1Failure();
     errors.push(`embedded: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   } finally {
     await unlink(tempSessionFile).catch(() => { });
@@ -3825,6 +3872,7 @@ const memoryLanceDBProPlugin = {
             thinkLevel: reflectionThinkLevel,
             toolErrorSignals,
             logger: api.logger,
+            api,  // SDK migration Bug 2: pass api for new runtime.agent API
           });
           api.logger.info(
             `memory-reflection: command:${action} reflection generation done for session ${currentSessionId}; runner=${reflectionGenerated.runner}; usedFallback=${reflectionGenerated.usedFallback ? "yes" : "no"}`
